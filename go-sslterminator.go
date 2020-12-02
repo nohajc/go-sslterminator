@@ -90,9 +90,8 @@ func main() {
 	}
 
 	config := tls.Config{
-		Certificates:       []tls.Certificate{cert},
-		InsecureSkipVerify: true,
-		NextProtos:         []string{"h2"},
+		Certificates: []tls.Certificate{cert},
+		NextProtos:   []string{"h2"},
 	}
 
 	listener, err := tls.Listen("tcp", localAddress, &config)
