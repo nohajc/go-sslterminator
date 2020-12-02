@@ -31,7 +31,11 @@ func main() {
 		log.Fatalf("error in tls.LoadX509KeyPair: %s", err)
 	}
 
-	config := tls.Config{Certificates: []tls.Certificate{cert}, InsecureSkipVerify: true}
+	config := tls.Config{
+		Certificates:       []tls.Certificate{cert},
+		InsecureSkipVerify: true,
+		NextProtos:         []string{"h2"},
+	}
 
 	listener, err := tls.Listen("tcp", localAddress, &config)
 	if err != nil {
