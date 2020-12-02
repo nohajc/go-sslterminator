@@ -1,12 +1,17 @@
 package main
 
 import (
+	"context"
 	"crypto/tls"
 	"flag"
 	"io"
 	"log"
 	"net"
 	"runtime"
+	"strings"
+
+	//"github.com/docker/docker/api/types"
+	"github.com/docker/docker/client"
 )
 
 var localAddress string
@@ -19,6 +24,59 @@ func init() {
 	flag.StringVar(&backendAddress, "b", ":8000", "backend address")
 	flag.StringVar(&certificatePath, "c", "cert.pem", "SSL certificate path")
 	flag.StringVar(&keyPath, "k", "key.pem", "SSL key path")
+}
+
+type DockerHelper struct {
+	cli            *client.Client
+	containerPort  string
+	currentBackend string
+}
+
+func newDockerHelper(containerPort string) *DockerHelper {
+	cli, err := client.NewEnvClient()
+	if err != nil {
+		panic(err)
+	}
+
+	return &DockerHelper{
+		cli:           cli,
+		containerPort: containerPort,
+	}
+}
+
+func (dh *DockerHelper) getBackend(addr string) string {
+	if strings.HasPrefix(addr, "dyn") {
+		// get port mapping from docker container
+		parts := strings.Split(addr, ":")
+		if len(parts) < 2 {
+			panic("invalid backend")
+		}
+		containerID := parts[1]
+		resp, err := dh.cli.ContainerInspect(context.Background(), containerID)
+		if err != nil {
+			return dh.currentBackend
+		}
+
+		backend := "none"
+		for k, v := range resp.NetworkSettings.Ports {
+			if k.Port() == dh.containerPort {
+				for _, binding := range v {
+					if binding.HostIP == "0.0.0.0" {
+						backend = ":" + binding.HostPort
+						break
+					}
+				}
+			}
+		}
+		if dh.currentBackend != backend {
+			if dh.currentBackend != "" {
+				log.Printf("backend changed to %s", backend)
+			}
+			dh.currentBackend = backend
+		}
+		return backend
+	}
+	return addr
 }
 
 func main() {
@@ -44,6 +102,12 @@ func main() {
 
 	log.Printf("local server on: %s, backend server on: %s", localAddress, backendAddress)
 
+	helper := newDockerHelper(localAddress[1:])
+	realPort := helper.getBackend(backendAddress)
+	if backendAddress != realPort {
+		log.Printf("current backend: %s", realPort)
+	}
+
 	for {
 		conn, err := listener.Accept()
 		if err != nil {
@@ -51,11 +115,11 @@ func main() {
 			break
 		}
 
-		go handle(conn)
+		go handle(conn, helper)
 	}
 }
 
-func handle(clientConn net.Conn) {
+func handle(clientConn net.Conn, helper *DockerHelper) {
 	tlsconn, ok := clientConn.(*tls.Conn)
 	if ok {
 
@@ -66,7 +130,7 @@ func handle(clientConn net.Conn) {
 			return
 		}
 
-		backendConn, err := net.Dial("tcp", backendAddress)
+		backendConn, err := net.Dial("tcp", helper.getBackend(backendAddress))
 		if err != nil {
 			log.Printf("error in net.Dial: %s", err)
 			clientConn.Close()
